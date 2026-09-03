@@ -71,7 +71,7 @@ export default function App() {
   const [settings, setSettings] = useState<TrisSettings>(() => {
     try {
       const saved = localStorage.getItem('tris_settings');
-      return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+      return saved ? { ...INITIAL_SETTINGS, ...JSON.parse(saved) } : INITIAL_SETTINGS;
     } catch {
       return INITIAL_SETTINGS;
     }
@@ -164,6 +164,8 @@ export default function App() {
       if (!settings.voiceSynthesis) return;
       setTrisStatus('SPEAKING');
       trisVoice.speak(text, {
+        engine: settings.voiceEngine,
+        geminiVoice: settings.geminiVoice,
         rate: settings.voiceRate,
         pitch: settings.voicePitch,
         voiceURI: settings.selectedVoiceURI,
@@ -174,6 +176,11 @@ export default function App() {
     },
     [settings]
   );
+
+  const stopSpeakingWithTris = useCallback(() => {
+    trisVoice.stop();
+    setTrisStatus('IDLE');
+  }, []);
 
   // Protocol Execution Engine
   const activateProtocol = useCallback(
@@ -570,6 +577,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onRequestBriefing={handleRequestBriefing}
         pendingTasksCount={pendingTasksCount}
+        isSpeaking={trisStatus === 'SPEAKING'}
       />
 
       {/* Main Tactical View Tabs */}
@@ -645,6 +653,8 @@ export default function App() {
                 onMicClick={toggleVoiceInput}
                 isListening={isListening}
                 isSpeaking={trisStatus === 'SPEAKING'}
+                activeVoiceName={settings.geminiVoice}
+                onStopSpeaking={stopSpeakingWithTris}
               />
 
               {/* Quick Directives & Active Protocols Card */}
@@ -692,6 +702,9 @@ export default function App() {
                 isListening={isListening}
                 onToggleVoiceInput={toggleVoiceInput}
                 onReplayAudio={(text) => speakWithTris(text)}
+                activeVoiceName={settings.geminiVoice}
+                voiceEngine={settings.voiceEngine}
+                isSpeaking={trisStatus === 'SPEAKING'}
                 onClearHistory={() =>
                   setMessages([
                     {

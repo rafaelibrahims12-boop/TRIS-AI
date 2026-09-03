@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Volume2, VolumeX, Bell, BellOff, Settings, Sparkles, Terminal } from 'lucide-react';
+import { Volume2, VolumeX, Bell, BellOff, Settings, Sparkles, Terminal, Radio } from 'lucide-react';
 import { TrisSettings } from '../types';
 
 interface TacticalHeaderProps {
@@ -8,6 +8,7 @@ interface TacticalHeaderProps {
   onOpenSettings: () => void;
   onRequestBriefing: () => void;
   pendingTasksCount: number;
+  isSpeaking?: boolean;
 }
 
 export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
@@ -16,6 +17,7 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
   onOpenSettings,
   onRequestBriefing,
   pendingTasksCount,
+  isSpeaking = false,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('');
   const [dateStr, setDateStr] = useState<string>('');
@@ -47,7 +49,7 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
   }, []);
 
   return (
-    <header id="tactical-header" className="w-full bg-[#02050a]/95 border-b border-[#00f2ff]/30 px-4 lg:px-8 py-4 backdrop-blur-md sticky top-0 z-40">
+    <header id="tactical-header" className="w-full bg-[#02050a]/95 border-b border-[#00f2ff]/30 px-4 lg:px-8 py-3.5 backdrop-blur-md sticky top-0 z-40">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Left: Brand Identity & Callsign */}
         <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-start">
@@ -59,11 +61,11 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
               <div className="flex items-center gap-2">
                 <h1 className="font-mono font-bold text-2xl tracking-[0.2em] uppercase text-white">TRIS</h1>
                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm bg-[#00f2ff]/10 border border-[#00f2ff]/40 text-[#00f2ff] uppercase tracking-wider">
-                  UPLINK 08.22.4.X
+                  FRIDAY PROTOCOL
                 </span>
               </div>
               <p className="text-[10px] text-[#00f2ff]/60 uppercase tracking-widest font-mono">
-                TACTICAL RESOURCE & INTELLIGENT SYSTEM // <span className="text-[#00f2ff] font-bold">{settings.callsign.toUpperCase()}</span>
+                TACTICAL RESOURCE & INTELLIGENT SYSTEM // <span className="text-[#00f2ff] font-bold">{(settings?.callsign || 'Boss').toUpperCase()}</span>
               </p>
             </div>
           </div>
@@ -74,16 +76,37 @@ export const TacticalHeader: React.FC<TacticalHeaderProps> = ({
           </div>
         </div>
 
-        {/* Center: System Telemetry (Latency, Uplink, Local Time) matching Immersive UI */}
-        <div className="hidden lg:flex items-center gap-8 text-right font-mono">
+        {/* Center: System Telemetry (Latency, Human Voice Status, Local Time) */}
+        <div className="hidden lg:flex items-center gap-6 text-right font-mono">
+          {/* Neural Voice Engine Status Badge */}
+          <button
+            onClick={onOpenSettings}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border transition-all cursor-pointer ${
+              isSpeaking
+                ? 'bg-[#00f2ff]/20 border-[#00f2ff] shadow-[0_0_12px_rgba(0,242,255,0.4)]'
+                : 'bg-[#00f2ff]/5 border-[#00f2ff]/30 hover:border-[#00f2ff]/60'
+            }`}
+            title="Click to configure TRIS voice synthesis and models"
+          >
+            <Radio className={`w-3.5 h-3.5 ${isSpeaking ? 'text-[#00f2ff] animate-pulse' : 'text-[#00f2ff]'}`} />
+            <div className="text-left flex flex-col">
+              <span className="text-[9px] text-[#00f2ff]/70 uppercase tracking-wider font-bold">
+                {settings?.voiceEngine === 'gemini' ? 'NEURAL HUMAN VOICE' : 'BROWSER TTS'}
+              </span>
+              <span className="text-xs font-bold text-white tracking-widest">
+                {settings?.voiceEngine === 'gemini' ? (settings?.geminiVoice || 'Kore').toUpperCase() : 'OFFLINE'}
+              </span>
+            </div>
+            {isSpeaking && (
+              <span className="w-2 h-2 rounded-full bg-[#00f2ff] animate-ping" />
+            )}
+          </button>
+
           <div className="flex flex-col text-left">
             <span className="text-[10px] text-[#00f2ff]/60 uppercase tracking-wider">System Latency</span>
-            <span className="text-base font-bold text-white tracking-widest">14ms</span>
+            <span className="text-base font-bold text-white tracking-widest">12ms</span>
           </div>
-          <div className="flex flex-col text-left">
-            <span className="text-[10px] text-[#00f2ff]/60 uppercase tracking-wider">Active Uplink</span>
-            <span className="text-base font-bold text-[#00f2ff] tracking-widest">SECURE</span>
-          </div>
+
           <div className="flex flex-col text-left">
             <span className="text-[10px] text-[#00f2ff]/60 uppercase tracking-wider">Local Time ({dateStr})</span>
             <span className="text-base font-bold text-white tracking-widest flex items-center gap-1.5">

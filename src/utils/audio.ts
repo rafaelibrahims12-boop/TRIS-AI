@@ -180,19 +180,60 @@ class TacticalAudioSystem {
 
 export const tacticalAudio = new TacticalAudioSystem();
 
-// Web Speech API Voice synthesis helper (FRIDAY persona)
+// Voice options definition
+export interface SpeakOptions {
+  engine?: 'gemini' | 'browser';
+  geminiVoice?: 'Kore' | 'Zephyr' | 'Puck' | 'Fenrir' | 'Charon';
+  rate?: number;
+  pitch?: number;
+  voiceURI?: string;
+  onStart?: () => void;
+  onEnd?: () => void;
+  onError?: () => void;
+}
+
+// Advanced Dual-Engine Speech Synthesizer for TRIS (Gemini 3.1 Flash Neural Human Voice + Web Audio Analyzer)
 export class TrisSpeechSynthesizer {
   private synth: SpeechSynthesis | null = null;
   private voices: SpeechSynthesisVoice[] = [];
+  private currentAudio: HTMLAudioElement | null = null;
+  private audioContext: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private audioSourceNode: MediaElementAudioSourceNode | null = null;
+  private speaking: boolean = false;
+  private audioCache = new Map<string, string>(); // key: `${voice}:${cleanedText}` -> base64 wav
+  private currentEndCallback: (() => void) | null = null;
 
   constructor() {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      this.synth = window.speechSynthesis;
-      this.loadVoices();
-      if (this.synth.onvoiceschanged !== undefined) {
-        this.synth.onvoiceschanged = () => this.loadVoices();
+    if (typeof window !== 'undefined') {
+      if ('speechSynthesis' in window) {
+        this.synth = window.speechSynthesis;
+        this.loadVoices();
+        if (this.synth.onvoiceschanged !== undefined) {
+          this.synth.onvoiceschanged = () => this.loadVoices();
+        }
       }
     }
+  }
+
+  private initAudioContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+    if (!this.audioContext) {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        this.audioContext = new AudioCtx();
+      }
+    }
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+    if (this.audioContext && !this.analyser) {
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 64;
+      this.analyser.smoothingTimeConstant = 0.8;
+      this.analyser.connect(this.audioContext.destination);
+    }
+    return this.audioContext;
   }
 
   private loadVoices() {
@@ -207,43 +248,140 @@ export class TrisSpeechSynthesizer {
     return this.voices;
   }
 
-  public speak(
-    text: string,
-    options: {
-      rate?: number;
-      pitch?: number;
-      voiceURI?: string;
-      onStart?: () => void;
-      onEnd?: () => void;
-      onError?: () => void;
-    } = {}
-  ) {
+  // Returns live vocal frequency spectrum for HUD equalizer visualization (0-255)
+  public getFrequencyData(outputArray: Uint8Array): void {
+    if (this.analyser && this.speaking) {
+      try {
+        this.analyser.getByteFrequencyData(outputArray);
+        return;
+      } catch {
+        // ignore
+      }
+    }
+    // If not speaking, decay to zero
+    outputArray.fill(0);
+  }
+
+  // Primary speak method: defaults to Gemini Neural Human Voice
+  public async speak(text: string, options: SpeakOptions = {}) {
+    this.stop();
+
+    const cleanText = text
+      .replace(/[*_#`~]/g, '')
+      .replace(/\[.*?\]/g, '')
+      .replace(/https?:\/\/\S+/g, 'link')
+      .replace(/\/\/+/g, ' - ')
+      .trim();
+
+    if (!cleanText) {
+      options.onEnd?.();
+      return;
+    }
+
+    const engine = options.engine ?? 'gemini';
+    const geminiVoice = options.geminiVoice ?? 'Kore';
+
+    if (engine === 'gemini') {
+      try {
+        await this.speakNeuralGemini(cleanText, geminiVoice, options);
+      } catch (err) {
+        console.warn('Neural TTS fallback to browser speech synthesis:', err);
+        this.speakBrowser(cleanText, options);
+      }
+    } else {
+      this.speakBrowser(cleanText, options);
+    }
+  }
+
+  // Speak using Gemini 3.1 Flash Neural Human Voice
+  private async speakNeuralGemini(text: string, voiceName: string, options: SpeakOptions) {
+    const cacheKey = `${voiceName}:${text.slice(0, 150)}`;
+    let audioBase64 = this.audioCache.get(cacheKey);
+
+    if (!audioBase64) {
+      const response = await fetch('/api/tris/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice: voiceName,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS server responded with ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data.audioBase64) {
+        throw new Error('No audio returned by TTS endpoint');
+      }
+
+      audioBase64 = data.audioBase64;
+      // Keep cache size bounded
+      if (this.audioCache.size > 50) {
+        const firstKey = this.audioCache.keys().next().value;
+        if (firstKey) this.audioCache.delete(firstKey);
+      }
+      this.audioCache.set(cacheKey, audioBase64!);
+    }
+
+    const audioBlob = this.base64ToBlob(audioBase64!, 'audio/wav');
+    const audioUrl = URL.createObjectURL(audioBlob);
+
+    const audio = new Audio(audioUrl);
+    this.currentAudio = audio;
+    audio.playbackRate = options.rate ?? 1.0;
+
+    // Connect to Web Audio Analyser for live visualizer waveform
+    try {
+      const ctx = this.initAudioContext();
+      if (ctx && this.analyser) {
+        // Avoid recreating source on same element
+        const source = ctx.createMediaElementSource(audio);
+        source.connect(this.analyser);
+      }
+    } catch {
+      // Audio element will still play directly through HTMLAudioElement
+    }
+
+    this.speaking = true;
+    options.onStart?.();
+
+    const cleanup = () => {
+      this.speaking = false;
+      URL.revokeObjectURL(audioUrl);
+      this.currentAudio = null;
+      options.onEnd?.();
+    };
+
+    audio.onended = cleanup;
+    audio.onerror = () => {
+      this.speaking = false;
+      URL.revokeObjectURL(audioUrl);
+      this.currentAudio = null;
+      options.onError?.();
+    };
+
+    try {
+      await audio.play();
+    } catch {
+      cleanup();
+    }
+  }
+
+  // Fallback: Browser Web Speech API with natural voice heuristics
+  private speakBrowser(cleanText: string, options: SpeakOptions) {
     if (!this.synth) {
       options.onEnd?.();
       return;
     }
 
     try {
-      // Cancel previous speech if ongoing
-      this.synth.cancel();
-
-      // Clean text for speech (strip markdown asterisks, backticks, bullet symbols)
-      const cleanText = text
-        .replace(/[*_#`~]/g, '')
-        .replace(/\[.*?\]/g, '')
-        .replace(/https?:\/\/\S+/g, 'link')
-        .trim();
-
-      if (!cleanText) {
-        options.onEnd?.();
-        return;
-      }
-
       const utterance = new SpeechSynthesisUtterance(cleanText);
-      utterance.rate = options.rate ?? 1.05;
+      utterance.rate = options.rate ?? 1.0;
       utterance.pitch = options.pitch ?? 1.0;
 
-      // Select voice (prioritize Irish, British English, or crisp female voices like FRIDAY)
       const voices = this.getAvailableVoices();
       let chosenVoice: SpeechSynthesisVoice | undefined;
 
@@ -252,20 +390,19 @@ export class TrisSpeechSynthesizer {
       }
 
       if (!chosenVoice) {
-        // Look for Irish English (en-IE) as FRIDAY in Marvel is voiced by Kerry Condon (Irish accent!)
+        // Kerry Condon / FRIDAY Irish accent
         chosenVoice = voices.find(v => v.lang === 'en-IE' || v.lang.startsWith('en_IE'));
       }
 
       if (!chosenVoice) {
-        // Next look for British female voices (en-GB) or crisp natural voices
+        // British or natural sounding female voices
         chosenVoice = voices.find(v => 
-          (v.lang.startsWith('en-GB') || v.lang.startsWith('en-')) &&
-          (v.name.includes('Female') || v.name.includes('Samantha') || v.name.includes('Serena') || v.name.includes('Victoria') || v.name.includes('Zira'))
+          (v.lang.startsWith('en-GB') || v.lang.startsWith('en')) &&
+          (v.name.includes('Natural') || v.name.includes('Neural') || v.name.includes('Google UK English Female') || v.name.includes('Samantha') || v.name.includes('Serena'))
         );
       }
 
       if (!chosenVoice) {
-        // Fallback to any English voice
         chosenVoice = voices.find(v => v.lang.startsWith('en'));
       }
 
@@ -273,24 +410,53 @@ export class TrisSpeechSynthesizer {
         utterance.voice = chosenVoice;
       }
 
-      utterance.onstart = () => options.onStart?.();
-      utterance.onend = () => options.onEnd?.();
-      utterance.onerror = () => options.onError?.();
+      this.speaking = true;
+      utterance.onstart = () => {
+        this.speaking = true;
+        options.onStart?.();
+      };
+      utterance.onend = () => {
+        this.speaking = false;
+        options.onEnd?.();
+      };
+      utterance.onerror = () => {
+        this.speaking = false;
+        options.onError?.();
+      };
 
       this.synth.speak(utterance);
     } catch {
+      this.speaking = false;
       options.onEnd?.();
     }
   }
 
+  private base64ToBlob(base64: string, mimeType: string): Blob {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new Blob([byteArray], { type: mimeType });
+  }
+
   public stop() {
+    this.speaking = false;
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+      } catch {}
+      this.currentAudio = null;
+    }
     if (this.synth) {
       this.synth.cancel();
     }
   }
 
   public isSpeaking(): boolean {
-    return !!this.synth?.speaking;
+    return this.speaking || !!this.synth?.speaking;
   }
 }
 

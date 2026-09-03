@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration, Modality } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
@@ -10,6 +10,25 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Helper: Convert raw 16-bit PCM (24kHz, 1 channel) into standard RIFF/WAVE buffer
+function pcm16ToWav(pcmBuffer: Buffer, sampleRate = 24000, channels = 1): Buffer {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcmBuffer.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // AudioFormat: PCM (1)
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * channels * 2, 28); // ByteRate
+  header.writeUInt16LE(channels * 2, 32); // BlockAlign
+  header.writeUInt16LE(16, 34); // BitsPerSample
+  header.write('data', 36);
+  header.writeUInt32LE(pcmBuffer.length, 40);
+  return Buffer.concat([header, pcmBuffer]);
+}
 
 // Lazy-initialized Gemini Client
 let aiClient: GoogleGenAI | null = null;
@@ -327,6 +346,83 @@ Current State of the System:
       actions,
       timestamp: new Date().toISOString(),
     });
+  }
+});
+
+// TRIS Human Voice Neural TTS Endpoint (Gemini 3.1 Flash Audio)
+app.post('/api/tris/tts', async (req, res) => {
+  try {
+    const { text, voice = 'Kore' } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'Text is required for voice synthesis' });
+    }
+
+    // Clean text for natural speech: strip markdown symbols, asterisks, urls, raw hashes, bullets
+    let cleanedText = text
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/[*_#~]/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/\/\/+/g, '-')
+      .replace(/•/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleanedText) {
+      return res.status(400).json({ error: 'Text was empty after sanitization' });
+    }
+
+    // Convert technical symbols into spoken English for human naturalness
+    cleanedText = cleanedText
+      .replace(/(\d+(?:\.\d+)?)\s*kW\b/gi, '$1 kilowatts')
+      .replace(/(\d+(?:\.\d+)?)\s*°C\b/gi, '$1 degrees Celsius')
+      .replace(/(\d+(?:\.\d+)?)\s*°F\b/gi, '$1 degrees Fahrenheit')
+      .replace(/(\d+)%/g, '$1 percent');
+
+    // Clamp length for speech responsiveness (limit to ~450 characters per chunk)
+    if (cleanedText.length > 450) {
+      cleanedText = cleanedText.slice(0, 450);
+    }
+
+    const ai = getGeminiClient();
+
+    // Natural human voice guidance prompt: directs Gemini to speak with lifelike inflection and warmth
+    const vocalPrompt = `Say in a warm, natural, human conversational cadence with crisp tactical clarity: ${cleanedText}`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-tts-preview',
+      contents: [{ parts: [{ text: vocalPrompt }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voice || 'Kore' },
+          },
+        },
+      },
+    });
+
+    const inlineData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    const base64Data = inlineData?.data;
+
+    if (!base64Data) {
+      return res.status(500).json({ error: 'No audio returned by neural voice model' });
+    }
+
+    // Convert linear 16-bit PCM (24kHz, 1 channel) into standard WAV format
+    const pcmBuffer = Buffer.from(base64Data, 'base64');
+    const wavBuffer = pcm16ToWav(pcmBuffer, 24000, 1);
+
+    res.json({
+      audioBase64: wavBuffer.toString('base64'),
+      mimeType: 'audio/wav',
+      voice: voice || 'Kore',
+      byteLength: wavBuffer.length,
+    });
+  } catch (error: any) {
+    console.error('TRIS TTS synthesis error:', error);
+    res.status(500).json({ error: error?.message || 'Neural voice synthesis failed' });
   }
 });
 

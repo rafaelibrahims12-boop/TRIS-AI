@@ -60,6 +60,8 @@ export interface ArcCoreTelemetry {
 
 export type TrisStatus = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 
+export type GeminiVoiceName = 'Kore' | 'Zephyr' | 'Puck' | 'Fenrir' | 'Charon';
+
 export interface TacticalActionExecuted {
   type: 'TASK_CREATED' | 'TASK_UPDATED' | 'TASK_DELETED' | 'DEVICE_MODIFIED' | 'PROTOCOL_ACTIVATED' | 'DIAGNOSTIC_RUN';
   detail: string;
@@ -76,6 +78,8 @@ export interface ChatMessage {
 export interface TrisSettings {
   callsign: string;
   voiceSynthesis: boolean;
+  voiceEngine: 'gemini' | 'browser';
+  geminiVoice: GeminiVoiceName;
   soundEffects: boolean;
   voiceRate: number;
   voicePitch: number;

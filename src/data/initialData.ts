@@ -290,8 +290,10 @@ export const INITIAL_TASKS: Task[] = [
 export const INITIAL_SETTINGS: TrisSettings = {
   callsign: 'Boss',
   voiceSynthesis: true,
+  voiceEngine: 'gemini',
+  geminiVoice: 'Kore',
   soundEffects: true,
-  voiceRate: 1.05,
+  voiceRate: 1.0,
   voicePitch: 1.0,
   autoBriefingOnLaunch: true,
 };
