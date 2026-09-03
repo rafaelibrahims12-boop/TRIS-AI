@@ -1,0 +1,6 @@
+{
+  "name": "TRIS - Tactical Daily & Home Automation AI",
+  "description": "FRIDAY-inspired tactical AI assistant for managing daily routines, tasks, and smart home automation systems.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
